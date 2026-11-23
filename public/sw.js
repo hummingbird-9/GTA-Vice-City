@@ -153,15 +153,13 @@ async function serveGameAsset(request, relativePath) {
         return serveChunkedPackage(request);
     }
 
-    const localPath = relativePath.startsWith('vcsky/')
-        ? `${APP_BASE}private-game-data/vcsky/fetched/${relativePath.slice('vcsky/'.length)}`
-        : `${APP_BASE}private-game-data/${relativePath}`;
+    const localPath = `${APP_BASE}game-data/${relativePath}`;
     return fetch(new Request(new URL(localPath, self.location.origin), request));
 }
 
 async function readChunkManifest() {
     const response = await fetch(
-        `${APP_BASE}private-game-data/vcbr/chunks/manifest.json`,
+        `${APP_BASE}game-data/vcbr/chunks/manifest.json`,
         { cache: 'no-store' },
     );
     if (!response.ok) throw new Error(`Chunk manifest returned ${response.status}`);
@@ -187,7 +185,7 @@ function streamPackageParts(parts, start, end) {
                     const wantedEnd = Math.min(end, thisPartEnd);
                     if (wantedStart > wantedEnd) continue;
 
-                    const url = `${APP_BASE}private-game-data/vcbr/chunks/${encodeURIComponent(part.name)}`;
+                    const url = `${APP_BASE}game-data/vcbr/chunks/${encodeURIComponent(part.name)}`;
                     const response = await fetch(url, { cache: 'no-store' });
                     if (!response.ok) throw new Error(`Could not load ${part.name}: ${response.status}`);
 
