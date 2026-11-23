@@ -234,7 +234,7 @@ async function loadGame(data) {
     script.addEventListener('load', () => {
         resumeAudioContexts();
     });
-    script.src = 'index.js';
+    script.src = `${APP_BASE}index.js`;
     document.body.appendChild(script);
 
     document.body.classList.add('gameIsStarted');
