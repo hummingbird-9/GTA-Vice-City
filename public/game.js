@@ -6,10 +6,11 @@ var wasm_content;
 
 const params = new URLSearchParams(window.location.search);
 
-// Base URLs
-// The engine binary requests /vcsky/ files by absolute URL; keep them same-origin.
-const replaceFetch = (str) => str.replace(/^https?:\/\/[^/]+\/vcsky\//, "/vcsky/")
-const replaceBR = "/vcbr/"
+// Resolve app assets relative to the deployment path, including GitHub Pages project sites.
+const APP_BASE = new URL(".", window.location.href).pathname;
+// The engine requests remote /vcsky/ URLs; route them through this app's scoped service worker.
+const replaceFetch = (str) => str.replace(/^https?:\/\/[^/]+\/vcsky\//, `${APP_BASE}vcsky/`);
+const replaceBR = `${APP_BASE}vcbr/`;
 
 // Configurable mode - show settings UI before play
 const configurableMode = params.get('configurable') === "1";
@@ -63,7 +64,7 @@ async function resumeAudioContexts() {
 // The game data is English-only; the UI language (src/i18n) does not change it.
 data_content = `${replaceBR}vc-sky-en-v6.data`;
 const data_index = `${replaceBR}vc-sky-en-v6.json`;
-wasm_content = 'engine/vc-sky-en-v6.wasm';
+wasm_content = `${APP_BASE}engine/vc-sky-en-v6.wasm`;
 
 async function loadData() {
     // Package index, written by the importer.
@@ -229,7 +230,7 @@ async function loadGame(data) {
     script.addEventListener('load', () => {
         resumeAudioContexts();
     });
-    script.src = 'index.js';
+    script.src = `${APP_BASE}index.js`;
     document.body.appendChild(script);
 
     document.body.classList.add('gameIsStarted');
