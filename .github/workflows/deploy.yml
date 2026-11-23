@@ -54,6 +54,38 @@ jobs:
           test -n "$css_file"
           test -s "$css_file"
 
+      - name: Verify bundled split game data
+        shell: bash
+        run: |
+          test -s dist/manifest.json
+          test -s dist/icon.svg
+          node --input-type=module <<'NODE'
+          import { readFileSync, statSync } from "node:fs";
+
+          const root = "dist/game-data/vcbr";
+          const manifest = JSON.parse(readFileSync(`${root}/chunks/manifest.json`, "utf8"));
+          const index = JSON.parse(readFileSync(`${root}/vc-sky-en-v6.json`, "utf8"));
+
+          if (!Array.isArray(manifest.parts) || manifest.parts.length === 0) {
+            throw new Error("Split-data manifest has no parts");
+          }
+
+          const total = manifest.parts.reduce((sum, part) => sum + part.size, 0);
+          if (total !== manifest.size || index.remote_package_size !== manifest.size) {
+            throw new Error("Split-data manifest and package index do not match");
+          }
+
+          for (const part of manifest.parts) {
+            const path = `${root}/chunks/${part.name}`;
+            const actual = statSync(path).size;
+            if (actual !== part.size) {
+              throw new Error(`${part.name}: expected ${part.size} bytes, got ${actual}`);
+            }
+          }
+
+          console.log(`Verified ${manifest.parts.length} split chunks (${manifest.size} bytes)`);
+          NODE
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v4
         with:
