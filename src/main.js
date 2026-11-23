@@ -163,7 +163,8 @@ async function prepareBundledPackageMarker() {
     const root = await navigator.storage.getDirectory();
     let needsMarker = false;
     try {
-      await root.getFileHandle(READY_MARKER);
+      const marker = await (await root.getFileHandle(READY_MARKER)).getFile();
+      needsMarker = (await marker.text()) !== OPFS_VERSION;
     } catch {
       needsMarker = true;
     }
@@ -209,10 +210,10 @@ async function prepareBundledPackageMarker() {
       await writable.close();
     }
 
-    console.log("[setup] verified bundled local game package");
+    console.log("[setup] verified bundled game-data package");
     return true;
   } catch (error) {
-    console.warn("[setup] no usable bundled local package:", error);
+    console.warn("[setup] no usable bundled game-data package:", error);
     return false;
   }
 }
