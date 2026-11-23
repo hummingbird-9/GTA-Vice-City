@@ -2,7 +2,7 @@
 
 Play GTA: Vice City right in your browser. Nothing to install: the game runs on your own device and keeps working offline.
 
-[![Open in your browser](https://img.shields.io/badge/-open%20in%20your%20browser-0098d4?style=for-the-badge)](https://joncodeofficial.github.io/gta-vice-city-wasm/)
+[![Open in your browser](https://img.shields.io/badge/-open%20in%20your%20browser-0098d4?style=for-the-badge)](https://hummingbird-9.github.io/GTA-Vice-City/)
 
 ![GTA: Vice City running in the browser, with a custom Spider-Man skin](public/demo.webp)
 
@@ -21,7 +21,7 @@ You need GTA: Vice City for PC installed on your computer — see [How it works]
 ## How it works
 
 1. Install GTA: Vice City for PC from your own copy (Steam, Rockstar Games Launcher or the original discs)
-2. Open the [live page](https://joncodeofficial.github.io/gta-vice-city-wasm/) and drop the folder where the game is installed (or a `.zip` of it) onto **Game files (PC)**, or use its **Choose folder** / **Choose .zip** buttons. On a phone, use a `.zip`
+2. Open the [live page](https://hummingbird-9.github.io/GTA-Vice-City/) and drop the folder where the game is installed (or a `.zip` of it) onto **Game files (PC)**, or use its **Choose folder** / **Choose .zip** buttons. On a phone, use a `.zip`
 3. The game loads into your browser's local storage (OPFS). It takes a few minutes and only happens once. Nothing is uploaded
 4. Click **Start to play** and the game loads entirely from your device
 
