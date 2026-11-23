@@ -115,14 +115,17 @@ async function checkReady() {
 
     const minSizes = { [PACKAGE_DATA]: 100 * 1024 * 1024, [PACKAGE_INDEX]: 0 };
     for (const [path, minSize] of Object.entries(minSizes)) {
-      let file;
+      let size;
       try {
-        file = await getFile(path);
+        size = (await getFile(path)).size;
       } catch {
-        return `OPFS file not found: ${path}`;
+        // The bundled game-data package is served directly from its split files.
+        const response = await fetch(`${BASE}${path}`, { method: "HEAD", cache: "no-store" });
+        if (!response.ok) return `Game package file unavailable: ${path} (${response.status})`;
+        size = Number(response.headers.get("Content-Length")) || 0;
       }
-      if (file.size < minSize) {
-        return `OPFS file too small: ${path} is ${(file.size / 1024 / 1024).toFixed(1)} MB, need > ${minSize / 1024 / 1024} MB`;
+      if (size < minSize) {
+        return `Game package file too small: ${path} is ${(size / 1024 / 1024).toFixed(1)} MB, need > ${minSize / 1024 / 1024} MB`;
       }
     }
 
@@ -134,7 +137,7 @@ async function checkReady() {
 
 // Returns null if OK, or a string describing the failure reason.
 async function verifyGameServing() {
-  const requiredUrls = [PACKAGE_DATA, PACKAGE_INDEX].map((path) => `/${path}`);
+  const requiredUrls = [PACKAGE_DATA, PACKAGE_INDEX].map((path) => `${BASE}${path}`);
 
   try {
     for (const url of requiredUrls) {
@@ -152,6 +155,66 @@ async function verifyGameServing() {
     return null;
   } catch (err) {
     return `verifyGameServing error: ${err.message}`;
+  }
+}
+
+async function prepareBundledPackageMarker() {
+  try {
+    const root = await navigator.storage.getDirectory();
+    let needsMarker = false;
+    try {
+      const marker = await (await root.getFileHandle(READY_MARKER)).getFile();
+      needsMarker = (await marker.text()) !== OPFS_VERSION;
+    } catch {
+      needsMarker = true;
+    }
+
+    const manifestResponse = await fetch(
+      `${BASE}game-data/vcbr/chunks/manifest.json`,
+      { cache: "no-store" },
+    );
+    const indexResponse = await fetch(
+      `${BASE}game-data/vcbr/vc-sky-en-v6.json`,
+      { cache: "no-store" },
+    );
+    if (!manifestResponse.ok || !indexResponse.ok) return false;
+
+    const [manifest, packageIndex] = await Promise.all([
+      manifestResponse.json(),
+      indexResponse.json(),
+    ]);
+    const total = manifest.parts?.reduce((sum, part) => sum + part.size, 0);
+    if (
+      !Array.isArray(manifest.parts) ||
+      manifest.parts.length === 0 ||
+      total !== manifest.size ||
+      packageIndex.remote_package_size !== manifest.size
+    ) {
+      console.warn("[setup] bundled package manifest does not match package index");
+      return false;
+    }
+
+    const checks = await Promise.all(manifest.parts.map(async (part) => {
+      const response = await fetch(
+        `${BASE}game-data/vcbr/chunks/${encodeURIComponent(part.name)}`,
+        { method: "HEAD", cache: "no-store" },
+      );
+      return response.ok && Number(response.headers.get("Content-Length")) === part.size;
+    }));
+    if (checks.some((ok) => !ok)) return false;
+
+    if (needsMarker) {
+      const handle = await root.getFileHandle(READY_MARKER, { create: true });
+      const writable = await handle.createWritable();
+      await writable.write(OPFS_VERSION);
+      await writable.close();
+    }
+
+    console.log("[setup] verified bundled game-data package");
+    return true;
+  } catch (error) {
+    console.warn("[setup] no usable bundled game-data package:", error);
+    return false;
   }
 }
 
@@ -542,8 +605,14 @@ async function initSetupFlow() {
     onError: (err) => showError("errors.generic", { message: err.message }),
   });
 
+  const hasBundledPackage = await prepareBundledPackageMarker();
+  if (hasBundledPackage) {
+    selectedFileName.textContent = "Game data installed";
+    if (resetFilesBtn) resetFilesBtn.hidden = true;
+  }
+
   const { ready, reason } = await waitForGameReady(2, 150);
-  console.log("[setup] game ready in OPFS:", ready, reason || "");
+  console.log("[setup] game ready:", ready, reason || "");
   if (ready) {
     setStorageStatus("status.ready", "ready");
     setPlayAvailability(true);

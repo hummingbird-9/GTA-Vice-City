@@ -107,6 +107,11 @@ export async function convertInstall({ source, index, readRevcFile, emit, onProg
   }
 
   for (const p of manifest.dataFiles) {
+    // This browser build is English-only; missing translations are optional.
+    if (p.startsWith("text/") && p !== "text/american.gxt" && !index.has(p)) {
+      tick();
+      continue;
+    }
     let bytes;
     if (revcSet.has(p)) bytes = await readRevcFile(p);
     else if (p === "audio/sfx.sdt") bytes = patchSdtRates(sdtBytes, rates);
