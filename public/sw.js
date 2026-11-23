@@ -35,12 +35,18 @@ const CONTENT_TYPES = new Map([
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
 
+// Resolve virtual game-file URLs under this service worker's registration scope.
+const scopePath = new URL(self.registration.scope).pathname;
+const APP_SCOPE_PATH = scopePath.endsWith('/') ? scopePath : `${scopePath}/`;
+
 self.addEventListener('fetch', event => {
     const url = new URL(event.request.url);
     const path = url.pathname;
-    if ((path.startsWith('/vcsky/') || path.startsWith('/vcbr/')) &&
+    const appPath = path.startsWith(APP_SCOPE_PATH) ? path.slice(APP_SCOPE_PATH.length) : '';
+    if (url.origin === self.location.origin &&
+        (appPath.startsWith('vcsky/') || appPath.startsWith('vcbr/')) &&
         (event.request.method === 'GET' || event.request.method === 'HEAD')) {
-        event.respondWith(serveFromOPFS(event.request, path));
+        event.respondWith(serveFromOPFS(event.request, appPath));
         return;
     }
 
