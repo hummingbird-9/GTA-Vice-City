@@ -119,7 +119,7 @@ async function checkReady() {
       try {
         size = (await getFile(path)).size;
       } catch {
-        // The private local package is served directly from its split files.
+        // The bundled game-data package is served directly from its split files.
         const response = await fetch(`${BASE}${path}`, { method: "HEAD", cache: "no-store" });
         if (!response.ok) return `Game package file unavailable: ${path} (${response.status})`;
         size = Number(response.headers.get("Content-Length")) || 0;
@@ -169,11 +169,11 @@ async function prepareBundledPackageMarker() {
     }
 
     const manifestResponse = await fetch(
-      `${BASE}private-game-data/vcbr/chunks/manifest.json`,
+      `${BASE}game-data/vcbr/chunks/manifest.json`,
       { cache: "no-store" },
     );
     const indexResponse = await fetch(
-      `${BASE}private-game-data/vcbr/vc-sky-en-v6.json`,
+      `${BASE}game-data/vcbr/vc-sky-en-v6.json`,
       { cache: "no-store" },
     );
     if (!manifestResponse.ok || !indexResponse.ok) return false;
@@ -195,7 +195,7 @@ async function prepareBundledPackageMarker() {
 
     const checks = await Promise.all(manifest.parts.map(async (part) => {
       const response = await fetch(
-        `${BASE}private-game-data/vcbr/chunks/${encodeURIComponent(part.name)}`,
+        `${BASE}game-data/vcbr/chunks/${encodeURIComponent(part.name)}`,
         { method: "HEAD", cache: "no-store" },
       );
       return response.ok && Number(response.headers.get("Content-Length")) === part.size;
@@ -606,7 +606,7 @@ async function initSetupFlow() {
 
   const hasBundledPackage = await prepareBundledPackageMarker();
   if (hasBundledPackage) {
-    selectedFileName.textContent = "Bundled local game data";
+    selectedFileName.textContent = "Game data installed";
     if (resetFilesBtn) resetFilesBtn.hidden = true;
   }
 
