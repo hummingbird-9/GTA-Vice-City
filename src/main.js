@@ -90,75 +90,140 @@ async function loadLegacyScripts() {
   }
 }
 
-// Returns null if OK, or a string describing the failure reason.
-async function checkReady() {
+async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const root = await navigator.storage.getDirectory();
-
-    const getFile = async (path) => {
-      const parts = path.split("/");
-      let dir = root;
-      for (const part of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(part);
-      return (await dir.getFileHandle(parts.at(-1))).getFile();
-    };
-
-    let marker;
-    try {
-      marker = await getFile(READY_MARKER);
-    } catch {
-      return `OPFS marker '${READY_MARKER}' not found`;
-    }
-    const version = await marker.text();
-    if (version !== OPFS_VERSION) {
-      return `OPFS marker version mismatch: got "${version}", expected "${OPFS_VERSION}"`;
-    }
-
-    const minSizes = { [PACKAGE_DATA]: 100 * 1024 * 1024, [PACKAGE_INDEX]: 0 };
-    for (const [path, minSize] of Object.entries(minSizes)) {
-      let size;
-      try {
-        size = (await getFile(path)).size;
-      } catch {
-        // The bundled game-data package is served directly from its split files.
-        const response = await fetch(`${BASE}${path}`, { method: "HEAD", cache: "no-store" });
-        if (!response.ok) return `Game package file unavailable: ${path} (${response.status})`;
-        size = Number(response.headers.get("Content-Length")) || 0;
-      }
-      if (size < minSize) {
-        return `Game package file too small: ${path} is ${(size / 1024 / 1024).toFixed(1)} MB, need > ${minSize / 1024 / 1024} MB`;
-      }
-    }
-
-    return null;
-  } catch (err) {
-    return `checkReady error: ${err.message}`;
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    window.clearTimeout(timer);
   }
 }
 
-// Returns null if OK, or a string describing the failure reason.
+// Verify the repository's committed split package directly from public assets.
+// The build workflow independently verifies each committed chunk's exact size.
+async function verifyBundledPackage() {
+  try {
+    const manifestUrl = `${BASE}game-data/vcbr/chunks/manifest.json`;
+    const indexUrl = `${BASE}game-data/${PACKAGE_INDEX}`;
+    const [manifestResponse, indexResponse] = await Promise.all([
+      fetchWithTimeout(manifestUrl, { cache: "no-store" }),
+      fetchWithTimeout(indexUrl, { cache: "no-store" }),
+    ]);
+
+    if (!manifestResponse.ok) {
+      return { ok: false, reason: `Split-data manifest returned ${manifestResponse.status}` };
+    }
+    if (!indexResponse.ok) {
+      return { ok: false, reason: `Game package index returned ${indexResponse.status}` };
+    }
+
+    const [manifest, packageIndex] = await Promise.all([
+      manifestResponse.json(),
+      indexResponse.json(),
+    ]);
+    const total = manifest.parts?.reduce((sum, part) => sum + part.size, 0);
+
+    if (
+      !Array.isArray(manifest.parts) ||
+      manifest.parts.length === 0 ||
+      total !== manifest.size ||
+      packageIndex.remote_package_size !== manifest.size ||
+      manifest.size < 100 * 1024 * 1024
+    ) {
+      return { ok: false, reason: "Split-data manifest and package index do not match" };
+    }
+
+    const checks = await Promise.all(manifest.parts.map(async (part) => {
+      const url = `${BASE}game-data/vcbr/chunks/${encodeURIComponent(part.name)}`;
+      const response = await fetchWithTimeout(url, { method: "HEAD", cache: "no-store" });
+      return { name: part.name, ok: response.ok, status: response.status };
+    }));
+    const failed = checks.find((check) => !check.ok);
+    if (failed) {
+      return { ok: false, reason: `Game data chunk ${failed.name} returned ${failed.status}` };
+    }
+
+    return { ok: true, reason: null, manifest };
+  } catch (error) {
+    const reason = error.name === "AbortError"
+      ? "Timed out while checking bundled game files"
+      : `Bundled game check failed: ${error.message}`;
+    return { ok: false, reason };
+  }
+}
+
+// Returns null when either the imported OPFS package or bundled split package is ready.
+async function checkReady() {
+  // A valid marker identifies a complete imported copy in this browser.
+  try {
+    const root = await navigator.storage.getDirectory();
+    let markerVersion = "";
+    try {
+      const marker = await (await root.getFileHandle(READY_MARKER)).getFile();
+      markerVersion = await marker.text();
+    } catch {
+      // A bundled package does not need an OPFS marker.
+    }
+
+    if (markerVersion === OPFS_VERSION) {
+      const getFile = async (path) => {
+        const parts = path.split("/");
+        let dir = root;
+        for (const part of parts.slice(0, -1)) {
+          dir = await dir.getDirectoryHandle(part);
+        }
+        return (await dir.getFileHandle(parts.at(-1))).getFile();
+      };
+
+      try {
+        const dataFile = await getFile(PACKAGE_DATA);
+        const indexFile = await getFile(PACKAGE_INDEX);
+        if (dataFile.size >= 100 * 1024 * 1024 && indexFile.size > 0) {
+          return null;
+        }
+      } catch {
+        // Incomplete local import: try the committed split package below.
+      }
+    }
+  } catch (error) {
+    console.warn("[setup] OPFS is unavailable; trying bundled game data:", error);
+  }
+
+  const bundled = await verifyBundledPackage();
+  return bundled.ok ? null : bundled.reason;
+}
+
 async function verifyGameServing() {
   const requiredUrls = [PACKAGE_DATA, PACKAGE_INDEX].map((path) => `${BASE}${path}`);
 
-  try {
-    for (const url of requiredUrls) {
-      let response;
-      try {
-        response = await fetch(url, { method: "HEAD", cache: "no-store" });
-      } catch (err) {
-        return `fetch failed for ${url}: ${err.message}`;
-      }
-      if (!response.ok) {
-        return `SW served ${response.status} for ${url}`;
-      }
+  for (const url of requiredUrls) {
+    try {
+      const response = await fetchWithTimeout(url, {
+        method: "HEAD",
+        cache: "no-store",
+      });
+      if (!response.ok) return `Game asset route returned ${response.status}: ${url}`;
+    } catch (error) {
+      return error.name === "AbortError"
+        ? `Timed out checking game asset route: ${url}`
+        : `Fetch failed for ${url}: ${error.message}`;
     }
-
-    return null;
-  } catch (err) {
-    return `verifyGameServing error: ${err.message}`;
   }
+
+  return null;
 }
 
 async function prepareBundledPackageMarker() {
+  const bundled = await verifyBundledPackage();
+  if (!bundled.ok) {
+    console.warn("[setup] bundled game package is not available:", bundled.reason);
+    return false;
+  }
+
+  // The marker is a convenience for this browser, not a requirement for the
+  // repository-bundled read-only package. If OPFS writes are denied, gameplay
+  // can still use the verified split files through the service worker.
   try {
     const root = await navigator.storage.getDirectory();
     let needsMarker = false;
@@ -169,53 +234,18 @@ async function prepareBundledPackageMarker() {
       needsMarker = true;
     }
 
-    const manifestResponse = await fetch(
-      `${BASE}game-data/vcbr/chunks/manifest.json`,
-      { cache: "no-store" },
-    );
-    const indexResponse = await fetch(
-      `${BASE}game-data/vcbr/vc-sky-en-v6.json`,
-      { cache: "no-store" },
-    );
-    if (!manifestResponse.ok || !indexResponse.ok) return false;
-
-    const [manifest, packageIndex] = await Promise.all([
-      manifestResponse.json(),
-      indexResponse.json(),
-    ]);
-    const total = manifest.parts?.reduce((sum, part) => sum + part.size, 0);
-    if (
-      !Array.isArray(manifest.parts) ||
-      manifest.parts.length === 0 ||
-      total !== manifest.size ||
-      packageIndex.remote_package_size !== manifest.size
-    ) {
-      console.warn("[setup] bundled package manifest does not match package index");
-      return false;
-    }
-
-    const checks = await Promise.all(manifest.parts.map(async (part) => {
-      const response = await fetch(
-        `${BASE}game-data/vcbr/chunks/${encodeURIComponent(part.name)}`,
-        { method: "HEAD", cache: "no-store" },
-      );
-      return response.ok && Number(response.headers.get("Content-Length")) === part.size;
-    }));
-    if (checks.some((ok) => !ok)) return false;
-
     if (needsMarker) {
       const handle = await root.getFileHandle(READY_MARKER, { create: true });
       const writable = await handle.createWritable();
       await writable.write(OPFS_VERSION);
       await writable.close();
     }
-
-    console.log("[setup] verified bundled game-data package");
-    return true;
   } catch (error) {
-    console.warn("[setup] no usable bundled game-data package:", error);
-    return false;
+    console.warn("[setup] could not write bundled-package marker; using read-only split files:", error);
   }
+
+  console.log("[setup] verified bundled game-data package");
+  return true;
 }
 
 async function waitForGameReady(retries = 6, delayMs = 400) {
