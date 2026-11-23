@@ -651,6 +651,8 @@ async function initSetupFlow() {
   }
 
   setStorageStatus("status.missing", "missing");
+  errorBox.style.display = "block";
+  errorBox.textContent = reason || "The bundled game files could not be verified. Check the site hosting and reload.";
 
   console.log("[setup] waiting for file selection");
 }
