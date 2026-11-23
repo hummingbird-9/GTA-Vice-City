@@ -6,10 +6,11 @@ var wasm_content;
 
 const params = new URLSearchParams(window.location.search);
 
-// Base URLs
-// The engine binary requests /vcsky/ files by absolute URL; keep them same-origin.
-const replaceFetch = (str) => str.replace(/^https?:\/\/[^/]+\/vcsky\//, "/vcsky/")
-const replaceBR = "/vcbr/"
+// Resolve all game-data URLs under the app's deployment path. The service
+// worker uses the same scope, so this works both on localhost and GitHub Pages.
+const APP_BASE = new URL("./", document.currentScript?.src || window.location.href).pathname;
+const replaceFetch = (str) => str.replace(/^https?:\/\/[^/]+\/vcsky\//, `${APP_BASE}vcsky/`);
+const replaceBR = `${APP_BASE}vcbr/`;
 
 // Configurable mode - show settings UI before play
 const configurableMode = params.get('configurable') === "1";
@@ -63,7 +64,7 @@ async function resumeAudioContexts() {
 // The game data is English-only; the UI language (src/i18n) does not change it.
 data_content = `${replaceBR}vc-sky-en-v6.data`;
 const data_index = `${replaceBR}vc-sky-en-v6.json`;
-wasm_content = 'engine/vc-sky-en-v6.wasm';
+wasm_content = `${APP_BASE}engine/vc-sky-en-v6.wasm`;
 
 async function loadData() {
     // Package index, written by the importer.
@@ -79,27 +80,31 @@ async function loadData() {
         throw new Error(`Failed to load data package: ${response.status} ${response.url}`);
     }
 
+    if (!Number.isSafeInteger(dataSize) || dataSize <= 0) {
+        throw new Error(`Invalid game package size: ${dataSize}`);
+    }
+
+    // Allocate once and stream directly into the final buffer. This avoids
+    // keeping all response chunks plus a second 162 MB copy in memory.
+    const buffer = new Uint8Array(dataSize);
     const reader = response.body.getReader();
     let receivedLength = 0;
-    let chunks = [];
     while (true) {
         const { done, value } = await reader.read();
-        if (done) {
-            break;
+        if (done) break;
+        if (receivedLength + value.byteLength > dataSize) {
+            throw new Error("Game package is larger than its index");
         }
-        chunks.push(value);
-        receivedLength += value.length;
+        buffer.set(value, receivedLength);
+        receivedLength += value.byteLength;
         if (typeof setStatus === "function") {
             setStatus(`Downloading...(${receivedLength}/${dataSize})`);
         }
     }
-    let buffer = new Uint8Array(receivedLength);
-    let position = 0;
-    for (let chunk of chunks) {
-        buffer.set(chunk, position);
-        position += chunk.length;
+    if (receivedLength !== dataSize) {
+        throw new Error(`Game package is incomplete: received ${receivedLength} of ${dataSize} bytes`);
     }
-    return new Uint8Array(buffer.buffer);
+    return buffer;
 };
 
 async function startGame(e) {
