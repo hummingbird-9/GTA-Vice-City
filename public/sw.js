@@ -35,18 +35,18 @@ const CONTENT_TYPES = new Map([
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
 
-// Resolve virtual game-file URLs under this service worker's registration scope.
 const scopePath = new URL(self.registration.scope).pathname;
-const APP_SCOPE_PATH = scopePath.endsWith('/') ? scopePath : `${scopePath}/`;
+const APP_BASE = scopePath.endsWith('/') ? scopePath : `${scopePath}/`;
 
 self.addEventListener('fetch', event => {
     const url = new URL(event.request.url);
     const path = url.pathname;
-    const appPath = path.startsWith(APP_SCOPE_PATH) ? path.slice(APP_SCOPE_PATH.length) : '';
-    if (url.origin === self.location.origin &&
+    const isSameOrigin = url.origin === self.location.origin;
+    const appPath = isSameOrigin && path.startsWith(APP_BASE) ? path.slice(APP_BASE.length) : '';
+    if (isSameOrigin &&
         (appPath.startsWith('vcsky/') || appPath.startsWith('vcbr/')) &&
         (event.request.method === 'GET' || event.request.method === 'HEAD')) {
-        event.respondWith(serveFromOPFS(event.request, appPath));
+        event.respondWith(serveGameAsset(event.request, appPath));
         return;
     }
 
@@ -142,6 +142,116 @@ async function serveFromOPFS(request, pathname) {
         return new Response(file, { status: 200, headers });
     } catch (error) {
         return new Response('Not found', { status: 404 });
+    }
+}
+
+
+async function serveGameAsset(request, relativePath) {
+    // Imported game files in OPFS take priority. The committed local package is
+    // a read-only fallback for running this private repository on localhost.
+    const local = await serveFromOPFS(request, `/${relativePath}`);
+    if (local.status !== 404) return local;
+
+    if (relativePath === 'vcbr/vc-sky-en-v6.data') {
+        return serveChunkedPackage(request);
+    }
+
+    const localPath = `${APP_BASE}game-data/${relativePath}`;
+    return fetch(new Request(new URL(localPath, self.location.origin), request));
+}
+
+async function readChunkManifest() {
+    const response = await fetch(
+        `${APP_BASE}game-data/vcbr/chunks/manifest.json`,
+        { cache: 'no-store' },
+    );
+    if (!response.ok) throw new Error(`Chunk manifest returned ${response.status}`);
+    const manifest = await response.json();
+    const total = manifest.parts?.reduce((sum, part) => sum + part.size, 0);
+    if (!Array.isArray(manifest.parts) || !manifest.parts.length || total !== manifest.size) {
+        throw new Error('Invalid split game package manifest');
+    }
+    return manifest;
+}
+
+function streamPackageParts(parts, start, end) {
+    return new ReadableStream({
+        async start(controller) {
+            let partStart = 0;
+            try {
+                for (const part of parts) {
+                    const thisPartStart = partStart;
+                    const thisPartEnd = thisPartStart + part.size - 1;
+                    partStart += part.size;
+
+                    const wantedStart = Math.max(start, thisPartStart);
+                    const wantedEnd = Math.min(end, thisPartEnd);
+                    if (wantedStart > wantedEnd) continue;
+
+                    const url = `${APP_BASE}game-data/vcbr/chunks/${encodeURIComponent(part.name)}`;
+                    const response = await fetch(url, { cache: 'no-store' });
+                    if (!response.ok) throw new Error(`Could not load ${part.name}: ${response.status}`);
+
+                    const reader = response.body.getReader();
+                    let readOffset = 0;
+                    while (readOffset <= wantedEnd - thisPartStart) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+
+                        const valueStart = readOffset;
+                        const valueEnd = readOffset + value.byteLength - 1;
+                        const from = Math.max(wantedStart - thisPartStart, valueStart);
+                        const to = Math.min(wantedEnd - thisPartStart, valueEnd);
+                        if (from <= to) {
+                            controller.enqueue(value.slice(from - valueStart, to - valueStart + 1));
+                        }
+                        readOffset += value.byteLength;
+                    }
+                    if (readOffset <= wantedEnd - thisPartStart) {
+                        throw new Error(`${part.name} ended before its expected size`);
+                    }
+                    await reader.cancel().catch(() => {});
+                }
+                controller.close();
+            } catch (error) {
+                controller.error(error);
+            }
+        },
+    });
+}
+
+async function serveChunkedPackage(request) {
+    try {
+        const manifest = await readChunkManifest();
+        const headers = buildHeaders(manifest.file || 'vc-sky-en-v6.data', manifest.size);
+
+        if (request.method === 'HEAD') {
+            return new Response(null, { status: 200, headers });
+        }
+
+        const requestedRange = request.headers.get('Range');
+        const range = parseRange(requestedRange, manifest.size);
+        if (requestedRange && !range) {
+            return new Response(null, {
+                status: 416,
+                headers: { 'Content-Range': `bytes */${manifest.size}` },
+            });
+        }
+
+        const start = range ? range.start : 0;
+        const end = range ? range.end : manifest.size - 1;
+        if (range) {
+            headers.set('Content-Range', `bytes ${start}-${end}/${manifest.size}`);
+            headers.set('Content-Length', String(end - start + 1));
+        }
+
+        return new Response(streamPackageParts(manifest.parts, start, end), {
+            status: range ? 206 : 200,
+            headers,
+        });
+    } catch (error) {
+        console.error('[sw] local split package failed:', error);
+        return new Response('Game package not found', { status: 404 });
     }
 }
 
