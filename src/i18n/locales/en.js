@@ -12,14 +12,14 @@ export default {
   intro:
     "Bring your copy of <strong>GTA: Vice City for PC</strong> and play in your browser. Nothing is uploaded and it works offline.",
   setup: {
-    checking: "Checking local game files…",
+    checking: "Checking game files…",
     title: "Setup",
     note: "Original PC version only (Steam, Rockstar Launcher or discs). You only do this once.",
     select: "Game files (PC)",
-    drop: "Drop your game folder or .zip here",
+    drop: "Choose a folder or ZIP",
     chooseFolder: "Choose folder",
-    chooseZip: "Choose .zip",
-    resetFiles: "Delete game",
+    chooseZip: "Choose ZIP",
+    resetFiles: "Delete game files",
     resetFilesConfirm: "This will delete the imported game files. Your saves and skins are kept.\n\nYou will need to import your game folder again to play. Continue?",
     resetting: "Resetting…",
     importing: "Importing game files",
@@ -27,7 +27,7 @@ export default {
   },
   status: {
     ready: "Ready to play",
-    missing: "Import required",
+    missing: "Import game files",
     unsupported: "Browser not supported",
     loadFailed: "Could not load the game",
   },
@@ -73,7 +73,7 @@ export default {
     enable: "Enable cheats",
   },
   play: {
-    start: "Start to play",
+    start: "Play Game",
   },
   loader: {
     downloading: "Downloading...",
