@@ -1504,3 +1504,108 @@ video {
 .controller-badge::before { content: "● "; }
 .controller-option .userdata-btn:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 3px; }
 body[data-is-touch="1"] .controller-option { display: none; }
+
+
+/* ─── Simplified start screen ─────────────────────────────────── */
+.start-container {
+  width: min(620px, 100%);
+  padding: clamp(24px, 6vh, 64px) 18px;
+}
+
+.start-container > div:first-child {
+  display: block;
+}
+
+.start-container > div:first-child > div:first-child {
+  padding: clamp(20px, 4vw, 34px);
+}
+
+.start-container h1 {
+  margin: 0 0 22px;
+  font-size: clamp(2rem, 5vw, 3rem);
+  line-height: 1.05;
+  letter-spacing: -0.035em;
+}
+
+#setup-overlay {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+#setup-overlay h2,
+#setup-overlay > p {
+  display: none;
+}
+
+.storage-status {
+  margin: 0 0 14px;
+  text-align: center;
+}
+
+.file-picker {
+  gap: 8px;
+  padding: 16px;
+}
+
+.file-picker-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 4px;
+}
+
+.game-pick-btn {
+  min-height: 46px;
+}
+
+.cheats-toggle {
+  margin: 14px 0 0;
+}
+
+.click-to-play {
+  margin: 12px 0 0;
+}
+
+.click-to-play button {
+  min-height: 56px;
+}
+
+#more-options {
+  margin-top: 16px;
+}
+
+#more-options > summary {
+  padding: 14px 18px;
+}
+
+#more-options > summary h2 {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+#more-options #reset-files-btn {
+  margin-top: 4px;
+  margin-bottom: 12px;
+}
+
+.disclaimer,
+.developed-by {
+  display: none !important;
+}
+
+@media (max-width: 640px) {
+  .start-container {
+    padding: 12px;
+  }
+
+  .start-container > div:first-child > div:first-child {
+    padding: 20px;
+  }
+
+  .start-container h1 {
+    font-size: 2.25rem;
+  }
+
+  .file-picker-actions {
+    grid-template-columns: 1fr 1fr;
+  }
+}
