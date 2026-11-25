@@ -144,8 +144,7 @@ async function serveFromOPFS(request, pathname) {
 
 
 async function serveGameAsset(request, relativePath) {
-    // Imported game files in OPFS take priority. The committed local package is
-    // a read-only fallback for running this private repository on localhost.
+    // Imported game files in OPFS take priority.
     const local = await serveFromOPFS(request, `/${relativePath}`);
     if (local.status !== 404) return local;
 
@@ -153,8 +152,89 @@ async function serveGameAsset(request, relativePath) {
         return serveChunkedPackage(request);
     }
 
+    // Individual fetched assets take priority over the bundled package.
     const localPath = `${APP_BASE}game-data/${relativePath}`;
-    return fetch(new Request(new URL(localPath, self.location.origin), request));
+    const fetched = await fetch(new Request(new URL(localPath, self.location.origin), request));
+    if (fetched.status !== 404 || !relativePath.startsWith('vcsky/')) {
+        return fetched;
+    }
+
+    // Some models are already inside the split game package, even when they
+    // are not duplicated in game-data/vcsky/fetched. Resolve those files by
+    // their package-index offsets instead of returning a misleading 404.
+    return serveBundledAsset(request, relativePath.slice('vcsky/'.length));
+}
+
+let bundledIndexPromise;
+
+async function readBundledIndex() {
+    if (!bundledIndexPromise) {
+        bundledIndexPromise = fetch(
+            `${APP_BASE}game-data/vcbr/vc-sky-en-v6.json`,
+            { cache: 'no-store' },
+        ).then(response => {
+            if (!response.ok) throw new Error(`Game package index returned ${response.status}`);
+            return response.json();
+        }).catch(error => {
+            bundledIndexPromise = null;
+            throw error;
+        });
+    }
+    return bundledIndexPromise;
+}
+
+async function serveBundledAsset(request, relativePath) {
+    try {
+        const index = await readBundledIndex();
+        const wanted = `/vc-assets/local/${relativePath}`.toLowerCase();
+        const entry = Object.values(index.files || {}).find(
+            file => file.filename?.toLowerCase() === wanted,
+        );
+        if (!entry || !Number.isSafeInteger(entry.start) ||
+            !Number.isSafeInteger(entry.end) || entry.end <= entry.start) {
+            return new Response('Not found', { status: 404 });
+        }
+
+        const filename = relativePath.split('/').pop();
+        const size = entry.end - entry.start;
+        const requestedRange = request.headers.get('Range');
+        const range = requestedRange ? parseRange(requestedRange, size) : null;
+        if (requestedRange && !range) {
+            return new Response(null, {
+                status: 416,
+                headers: { 'Content-Range': `bytes */${size}` },
+            });
+        }
+
+        if (request.method === 'HEAD') {
+            return new Response(null, { status: 200, headers: buildHeaders(filename, size) });
+        }
+
+        const selected = range || { start: 0, end: size - 1 };
+        const packageRequest = new Request(
+            new URL(`${APP_BASE}vcbr/vc-sky-en-v6.data`, self.location.origin),
+            {
+                method: 'GET',
+                headers: {
+                    Range: `bytes=${entry.start + selected.start}-${entry.start + selected.end}`,
+                },
+            },
+        );
+        const packageResponse = await serveChunkedPackage(packageRequest);
+        if (!packageResponse.ok) return packageResponse;
+
+        const headers = buildHeaders(filename, selected.end - selected.start + 1);
+        if (range) {
+            headers.set('Content-Range', `bytes ${range.start}-${range.end}/${size}`);
+        }
+        return new Response(packageResponse.body, {
+            status: range ? 206 : 200,
+            headers,
+        });
+    } catch (error) {
+        console.error('[sw] bundled asset lookup failed:', relativePath, error);
+        return new Response('Bundled asset not found', { status: 404 });
+    }
 }
 
 async function readChunkManifest() {
