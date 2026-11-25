@@ -288,14 +288,18 @@ async function serveGameAsset(request, relativePath) {
     // Individual fetched assets take priority over the bundled package.
     const localPath = `${APP_BASE}game-data/${relativePath}`;
     const fetched = await fetchGameAsset(new Request(new URL(localPath, self.location.origin), request));
-    if (fetched.status !== 404 || !relativePath.startsWith('vcsky/')) {
+    const canUseBundledFallback = fetched.status === 404 ||
+        fetched.status === 429 || fetched.status >= 500;
+    if (!canUseBundledFallback || !relativePath.startsWith('vcsky/')) {
         return fetched;
     }
 
-    // Some models are already inside the split game package, even when they
-    // are not duplicated in game-data/vcsky/fetched. Resolve those files by
-    // their package-index offsets instead of returning a misleading 404.
-    return serveBundledAsset(request, relativePath.slice('vcsky/'.length));
+    // Some assets are already inside the split game package, even when they
+    // are not duplicated in game-data/vcsky/fetched. Use that copy for both
+    // missing files and temporary host rate-limit/server errors.
+    const bundled = await serveBundledAsset(request, relativePath.slice('vcsky/'.length));
+    if (bundled.ok || fetched.status === 404) return bundled;
+    return fetched;
 }
 
 let bundledIndexPromise;
