@@ -1,5 +1,16 @@
 const OPFS_MARKER = '_game_ready';
 
+// Cache successful game downloads so repeat visits do not request the same
+// files and split-package chunks from GitHub Pages again.
+// Bump the version when replacing the hosted game-data files.
+const GAME_ASSET_CACHE = 'vcsky-game-assets-v1';
+const MAX_CONCURRENT_GAME_REQUESTS = 3;
+const MAX_GAME_FETCH_RETRIES = 4;
+
+let activeGameRequests = 0;
+let gameRequestQueue = [];
+let gameFetchCooldownUntil = 0;
+
 // Request types that make up the app itself; game data is served from OPFS.
 const REVALIDATED_DESTINATIONS = new Set(['document', 'script', 'style', 'worker', 'manifest']);
 
@@ -33,7 +44,14 @@ const CONTENT_TYPES = new Map([
 ]);
 
 self.addEventListener('install', () => self.skipWaiting());
-self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
+self.addEventListener('activate', e => e.waitUntil((async () => {
+    // Remove only old caches owned by this game's service worker.
+    const keys = await caches.keys();
+    await Promise.all(keys
+        .filter(key => key.startsWith('vcsky-game-assets-') && key !== GAME_ASSET_CACHE)
+        .map(key => caches.delete(key)));
+    await self.clients.claim();
+})()));
 
 const APP_BASE = new URL(self.registration.scope).pathname;
 
@@ -60,6 +78,121 @@ self.addEventListener('fetch', event => {
         );
     }
 });
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function getRetryDelay(response, attempt) {
+    let delay = NaN;
+    const retryAfter = response.headers.get('Retry-After');
+    if (retryAfter) {
+        const seconds = Number(retryAfter);
+        delay = Number.isFinite(seconds)
+            ? seconds * 1000
+            : Date.parse(retryAfter) - Date.now();
+    }
+
+    if (!Number.isFinite(delay) || delay <= 0) {
+        const reset = Number(response.headers.get('X-RateLimit-Reset'));
+        if (Number.isFinite(reset) && reset > 0) {
+            delay = reset * 1000 - Date.now();
+        }
+    }
+
+    if (!Number.isFinite(delay) || delay <= 0) {
+        delay = Math.min(30000, 500 * (2 ** attempt));
+    }
+
+    return Math.min(60000, Math.max(250, delay)) + Math.floor(Math.random() * 250);
+}
+
+async function fetchWithRetry(request) {
+    for (let attempt = 0; attempt <= MAX_GAME_FETCH_RETRIES; attempt++) {
+        const cooldown = gameFetchCooldownUntil - Date.now();
+        if (cooldown > 0) await sleep(cooldown);
+
+        let response;
+        try {
+            response = await fetch(request.clone());
+        } catch (error) {
+            if (attempt === MAX_GAME_FETCH_RETRIES) throw error;
+            await sleep(Math.min(10000, 500 * (2 ** attempt)));
+            continue;
+        }
+
+        const retryable = response.status === 408 || response.status === 429 ||
+            response.status === 500 || response.status === 502 ||
+            response.status === 503 || response.status === 504;
+        if (!retryable || attempt === MAX_GAME_FETCH_RETRIES) {
+            return response;
+        }
+
+        const delay = getRetryDelay(response, attempt);
+        if (response.status === 429) {
+            gameFetchCooldownUntil = Math.max(
+                gameFetchCooldownUntil,
+                Date.now() + delay,
+            );
+        }
+
+        await response.body?.cancel().catch(() => {});
+        await sleep(delay);
+    }
+
+    throw new Error('Game asset request retries exhausted');
+}
+
+function drainGameRequestQueue() {
+    while (activeGameRequests < MAX_CONCURRENT_GAME_REQUESTS && gameRequestQueue.length) {
+        const job = gameRequestQueue.shift();
+        activeGameRequests++;
+        fetchWithRetry(job.request)
+            .then(job.resolve, job.reject)
+            .finally(() => {
+                activeGameRequests--;
+                drainGameRequestQueue();
+            });
+    }
+}
+
+function queuedGameFetch(input, init) {
+    const request = input instanceof Request ? new Request(input, init) : new Request(input, init);
+    return new Promise((resolve, reject) => {
+        gameRequestQueue.push({ request, resolve, reject });
+        drainGameRequestQueue();
+    });
+}
+
+async function fetchGameAsset(input, init) {
+    const request = input instanceof Request ? new Request(input, init) : new Request(input, init);
+    const cacheable = request.method === 'GET' && !request.headers.has('Range');
+    let cache = null;
+
+    if (cacheable) {
+        try {
+            cache = await caches.open(GAME_ASSET_CACHE);
+            const cached = await cache.match(request);
+            if (cached) return cached;
+        } catch (error) {
+            console.warn('[sw] game asset cache read failed:', request.url, error);
+        }
+    }
+
+    const response = await queuedGameFetch(request);
+
+    // Cache only complete successful responses. Quota or cache errors must
+    // never stop the game from receiving the network response.
+    if (cacheable && cache && response.status === 200 && response.type !== 'opaque') {
+        try {
+            await cache.put(request, response.clone());
+        } catch (error) {
+            console.warn('[sw] game asset cache write failed:', request.url, error);
+        }
+    }
+
+    return response;
+}
 
 function getContentType(filename) {
     const lower = filename.toLowerCase();
@@ -154,7 +287,7 @@ async function serveGameAsset(request, relativePath) {
 
     // Individual fetched assets take priority over the bundled package.
     const localPath = `${APP_BASE}game-data/${relativePath}`;
-    const fetched = await fetch(new Request(new URL(localPath, self.location.origin), request));
+    const fetched = await fetchGameAsset(new Request(new URL(localPath, self.location.origin), request));
     if (fetched.status !== 404 || !relativePath.startsWith('vcsky/')) {
         return fetched;
     }
@@ -169,7 +302,7 @@ let bundledIndexPromise;
 
 async function readBundledIndex() {
     if (!bundledIndexPromise) {
-        bundledIndexPromise = fetch(
+        bundledIndexPromise = fetchGameAsset(
             `${APP_BASE}game-data/vcbr/vc-sky-en-v6.json`,
             { cache: 'no-store' },
         ).then(response => {
@@ -238,7 +371,7 @@ async function serveBundledAsset(request, relativePath) {
 }
 
 async function readChunkManifest() {
-    const response = await fetch(
+    const response = await fetchGameAsset(
         `${APP_BASE}game-data/vcbr/chunks/manifest.json`,
         { cache: 'no-store' },
     );
@@ -266,7 +399,7 @@ function streamPackageParts(parts, start, end) {
                     if (wantedStart > wantedEnd) continue;
 
                     const url = `${APP_BASE}game-data/vcbr/chunks/${encodeURIComponent(part.name)}`;
-                    const response = await fetch(url, { cache: 'no-store' });
+                    const response = await fetchGameAsset(url, { cache: 'no-store' });
                     if (!response.ok) throw new Error(`Could not load ${part.name}: ${response.status}`);
 
                     const reader = response.body.getReader();
